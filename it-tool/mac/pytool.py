@@ -66,7 +66,7 @@ def collect_diagnostics(outfile):
     append("Root Disk Usage", ["df", "-H", "/"]) 
     append("Spotlight Indexing", ["mdutil", "-s", "/"]) 
     append("Network Interfaces", ["ifconfig", "-a"]) 
-    append("DNS Summary", "sh -c 'scutil --dns | sed -n "1,160p"'") 
+    append("DNS Summary", 'sh -c \'scutil --dns | sed -n "1,160p"\'') 
     append("Default Route", ["route", "-n", "get", "default"]) 
     append(
         "Wi-Fi (if present)",
@@ -82,6 +82,187 @@ def collect_diagnostics(outfile):
             'tell application "System Events" to get the name of every login item',
         ],
     )
+
+
+# ---------------- Functions needed for reporting -----------------
+
+def _disk_used_percent():
+    out = run(["df", "-k", "/"]) or ""
+    lines = [l for l in out.splitlines() if l.strip()]
+    if len(lines) < 2:
+        return None
+    # header: Filesystem 1024-blocks Used Available Capacity iused ifree %iused Mounted on
+    parts = lines[1].split()
+    if len(parts) < 6:
+        return None
+    # try to find a column like '85%'
+    for p in parts:
+        if p.endswith('%') and p[:-1].isdigit():
+            try:
+                return int(p[:-1])
+            except ValueError:
+                pass
+    return None
+
+
+def _iface_ip(iface):
+    if not iface:
+        return None
+    out = run(["ipconfig", "getifaddr", iface]) or ""
+    o = out.strip()
+    return o if o and "does not have an IPv4 address" not in o else None
+
+
+def _dns_nameserver_count():
+    out = run(["sh", "-c", "scutil --dns | grep -E 'nameserver\\\\[[0-9]+\\\\]' | wc -l"]) or ""
+    try:
+        return int(out.strip())
+    except Exception:
+        return None
+
+
+def build_health_summary():
+    lines = []
+
+    # Disk usage
+    used_pct = _disk_used_percent()
+    if used_pct is None:
+        lines.append("Disk: Unknown usage (df parse failed)")
+    else:
+        state = "OK" if used_pct < 85 else ("WARN" if used_pct < 95 else "CRIT")
+        lines.append(f"Disk: {used_pct}% used (/)	[{state}]")
+
+    # Network default route + IP
+    iface = primary_interface()
+    ip = _iface_ip(iface) if iface else None
+    if not iface:
+        lines.append("Network: No default route	[WARN]")
+    else:
+        if ip:
+            lines.append(f"Network: {iface} has IP {ip}	[OK]")
+        else:
+            lines.append(f"Network: {iface} has no IP	[WARN]")
+
+    # DNS resolvers
+    dns_count = _dns_nameserver_count()
+    if dns_count is None:
+        lines.append("DNS: Unknown (scutil parse failed)")
+    else:
+        state = "OK" if dns_count >= 1 else "WARN"
+        lines.append(f"DNS: {dns_count} resolver(s)	[{state}]")
+
+    # Spotlight indexing
+    sp = run(["mdutil", "-s", "/"]) or ""
+    if "Indexing enabled" in sp:
+        lines.append("Spotlight: Indexing enabled	[OK]")
+    elif "Indexing disabled" in sp:
+        lines.append("Spotlight: Indexing disabled	[INFO]")
+    else:
+        lines.append("Spotlight: Unknown status	[INFO]")
+
+    # Time sync (best-effort)
+    tsync = run(["systemsetup", "-getusingnetworktime"]) or ""
+    if "On" in tsync:
+        lines.append("Time Sync: On	[OK]")
+    elif "Off" in tsync:
+        lines.append("Time Sync: Off	[INFO]")
+    else:
+        lines.append("Time Sync: Unknown	[INFO]")
+
+    return "\n".join(lines)
+
+
+def collect_sections():
+    sections = []
+    header = (
+        "macOS Python IT Toolkit Diagnostics\n"
+        f"Timestamp: {datetime.now().isoformat()}\n"
+        "Tool version: 0.1.0\n"
+    )
+    sections.append(("Header", header))
+    sections.append(("Health Summary", build_health_summary()))
+    sections.append(("OS Version", run(["sw_vers"]) or ""))
+    sections.append(("Kernel", run(["uname", "-a"]) or ""))
+    sections.append(("Uptime", run(["uptime"]) or ""))
+    sections.append(("Hardware", run(["system_profiler", "SPHardwareDataType"]) or ""))
+    sections.append(("Root Disk Usage", run(["df", "-H", "/"]) or ""))
+    sections.append(("Spotlight Indexing", run(["mdutil", "-s", "/"]) or ""))
+    sections.append(("Network Interfaces", run(["ifconfig", "-a"]) or ""))
+    sections.append(("DNS Summary", run('sh -c \'scutil --dns | sed -n "1,160p"\'') or ""))
+    sections.append(("Default Route", run(["route", "-n", "get", "default"]) or ""))
+    sections.append(("Wi-Fi (if present)", run("sh -c 'networksetup -listallhardwareports; echo; networksetup -getinfo Wi-Fi || true'") or ""))
+    sections.append(("Recent Reboots", run("last reboot | head -n 10") or ""))
+    sections.append(("Login Items", run(["osascript", "-e", 'tell application "System Events" to get the name of every login item']) or ""))
+    return sections
+
+
+def write_text_report(outfile, sections):
+    with open(outfile, 'w') as f:
+        header_title, header_content = sections[0]
+        f.write(header_content + "\n")
+        for title, content in sections[1:]:
+            write_section(f, title, content or "")
+
+
+def write_html_report(html_path, sections):
+    import html
+    css = """
+    body{font-family:-apple-system,system-ui,BlinkMacSystemFont,Segoe UI,Roboto,Arial,sans-serif;margin:20px;color:#111}
+    h1{font-size:20px;margin:0 0 8px}
+    .meta{color:#555;margin-bottom:16px}
+    .card{border:1px solid #e5e7eb;border-radius:8px;margin-bottom:16px;overflow:hidden}
+    .card h2{background:#f9fafb;margin:0;padding:10px 12px;font-size:16px;border-bottom:1px solid #eee}
+    .card pre{margin:0;padding:12px;overflow:auto;background:#fff}
+    .hs li{margin:4px 0}
+    .badge{display:inline-block;font-size:11px;border-radius:10px;padding:2px 8px;margin-left:6px}
+    .ok{background:#e6f7ef;color:#046c4e;border:1px solid #a7e7c8}
+    .warn{background:#fff7e6;color:#8a5200;border:1px solid #ffd48a}
+    .crit{background:#ffebeb;color:#a40000;border:1px solid #ffb3b3}
+    .info{background:#eef2ff;color:#3730a3;border:1px solid #c7d2fe}
+    """
+
+    _, header_content = sections[0]
+    lines = header_content.splitlines()
+    title = "macOS Python IT Toolkit"
+    meta = html.escape(" | ".join(lines[1:3])) if len(lines) >= 3 else ""
+
+    hs_title, hs_content = sections[1]
+    items = []
+    for line in (hs_content or "").splitlines():
+        cls = 'info'
+        if '[CRIT]' in line:
+            cls = 'crit'
+        elif '[WARN]' in line:
+            cls = 'warn'
+        elif '[OK]' in line:
+            cls = 'ok'
+        display = html.escape(line.split('[')[0].strip())
+        tag = line[line.rfind('['):].strip('[]') if '[' in line else 'INFO'
+        items.append(f"<li>{display} <span class='badge {cls}'>{html.escape(tag)}</span></li>")
+
+    cards = []
+    for title2, content in sections[2:]:
+        cards.append(f"<div class='card'><h2>{html.escape(title2)}</h2><pre>{html.escape(content or '')}</pre></div>")
+
+    html_doc = f"""
+    <!doctype html>
+    <html><head><meta charset='utf-8'><title>{html.escape(title)}</title>
+    <meta name='viewport' content='width=device-width, initial-scale=1'>
+    <style>{css}</style></head>
+    <body>
+      <h1>{html.escape(title)}</h1>
+      <div class='meta'>{meta}</div>
+      <div class='card'>
+        <h2>Health Summary</h2>
+        <ul class='hs'>
+          {''.join(items)}
+        </ul>
+      </div>
+      {''.join(cards)}
+    </body></html>
+    """
+    with open(html_path, 'w') as f:
+        f.write(html_doc)
 
 
 # --- Helpers for fixes ---
@@ -248,183 +429,4 @@ def main(argv=None):
 if __name__ == '__main__':
     sys.exit(main())
 
-# ---------------- Internal health summary -----------------
 
-def build_health_summary():
-    lines = []
-
-    # Disk usage
-    used_pct = _disk_used_percent()
-    if used_pct is None:
-        lines.append("Disk: Unknown usage (df parse failed)")
-    else:
-        state = "OK" if used_pct < 85 else ("WARN" if used_pct < 95 else "CRIT")
-        lines.append(f"Disk: {used_pct}% used (/)	[{state}]")
-
-    # Network default route + IP
-    iface = primary_interface()
-    ip = _iface_ip(iface) if iface else None
-    if not iface:
-        lines.append("Network: No default route	[WARN]")
-    else:
-        if ip:
-            lines.append(f"Network: {iface} has IP {ip}	[OK]")
-        else:
-            lines.append(f"Network: {iface} has no IP	[WARN]")
-
-    # DNS resolvers
-    dns_count = _dns_nameserver_count()
-    if dns_count is None:
-        lines.append("DNS: Unknown (scutil parse failed)")
-    else:
-        state = "OK" if dns_count >= 1 else "WARN"
-        lines.append(f"DNS: {dns_count} resolver(s)	[{state}]")
-
-    # Spotlight indexing
-    sp = run(["mdutil", "-s", "/"]) or ""
-    if "Indexing enabled" in sp:
-        lines.append("Spotlight: Indexing enabled	[OK]")
-    elif "Indexing disabled" in sp:
-        lines.append("Spotlight: Indexing disabled	[INFO]")
-    else:
-        lines.append("Spotlight: Unknown status	[INFO]")
-
-    # Time sync (best-effort)
-    tsync = run(["systemsetup", "-getusingnetworktime"]) or ""
-    if "On" in tsync:
-        lines.append("Time Sync: On	[OK]")
-    elif "Off" in tsync:
-        lines.append("Time Sync: Off	[INFO]")
-    else:
-        lines.append("Time Sync: Unknown	[INFO]")
-
-    return "\n".join(lines)
-
-
-def _disk_used_percent():
-    out = run(["df", "-k", "/"]) or ""
-    lines = [l for l in out.splitlines() if l.strip()]
-    if len(lines) < 2:
-        return None
-    # header: Filesystem 1024-blocks Used Available Capacity iused ifree %iused Mounted on
-    parts = lines[1].split()
-    if len(parts) < 6:
-        return None
-    # try to find a column like '85%'
-    for p in parts:
-        if p.endswith('%') and p[:-1].isdigit():
-            try:
-                return int(p[:-1])
-            except ValueError:
-                pass
-    return None
-
-
-def _iface_ip(iface):
-    if not iface:
-        return None
-    out = run(["ipconfig", "getifaddr", iface]) or ""
-    o = out.strip()
-    return o if o and "does not have an IPv4 address" not in o else None
-
-
-def _dns_nameserver_count():
-    out = run(["sh", "-c", "scutil --dns | grep -E 'nameserver\\\\[[0-9]+\\\\]' | wc -l"]) or ""
-    try:
-        return int(out.strip())
-    except Exception:
-        return None
-
-# ---------------- HTML reporting additions -----------------
-
-def collect_sections():
-    sections = []
-    header = (
-        "macOS Python IT Toolkit Diagnostics\n"
-        f"Timestamp: {datetime.now().isoformat()}\n"
-        "Tool version: 0.1.0\n"
-    )
-    sections.append(("Header", header))
-    sections.append(("Health Summary", build_health_summary()))
-    sections.append(("OS Version", run(["sw_vers"]) or ""))
-    sections.append(("Kernel", run(["uname", "-a"]) or ""))
-    sections.append(("Uptime", run(["uptime"]) or ""))
-    sections.append(("Hardware", run(["system_profiler", "SPHardwareDataType"]) or ""))
-    sections.append(("Root Disk Usage", run(["df", "-H", "/"]) or ""))
-    sections.append(("Spotlight Indexing", run(["mdutil", "-s", "/"]) or ""))
-    sections.append(("Network Interfaces", run(["ifconfig", "-a"]) or ""))
-    sections.append(("DNS Summary", run("sh -c 'scutil --dns | sed -n \"1,160p\"'") or ""))
-    sections.append(("Default Route", run(["route", "-n", "get", "default"]) or ""))
-    sections.append(("Wi-Fi (if present)", run("sh -c 'networksetup -listallhardwareports; echo; networksetup -getinfo Wi-Fi || true'") or ""))
-    sections.append(("Recent Reboots", run("last reboot | head -n 10") or ""))
-    sections.append(("Login Items", run(["osascript", "-e", 'tell application "System Events" to get the name of every login item']) or ""))
-    return sections
-
-
-def write_text_report(outfile, sections):
-    with open(outfile, 'w') as f:
-        header_title, header_content = sections[0]
-        f.write(header_content + "\n")
-        for title, content in sections[1:]:
-            write_section(f, title, content or "")
-
-
-def write_html_report(html_path, sections):
-    import html
-    css = """
-    body{font-family:-apple-system,system-ui,BlinkMacSystemFont,Segoe UI,Roboto,Arial,sans-serif;margin:20px;color:#111}
-    h1{font-size:20px;margin:0 0 8px}
-    .meta{color:#555;margin-bottom:16px}
-    .card{border:1px solid #e5e7eb;border-radius:8px;margin-bottom:16px;overflow:hidden}
-    .card h2{background:#f9fafb;margin:0;padding:10px 12px;font-size:16px;border-bottom:1px solid #eee}
-    .card pre{margin:0;padding:12px;overflow:auto;background:#fff}
-    .hs li{margin:4px 0}
-    .badge{display:inline-block;font-size:11px;border-radius:10px;padding:2px 8px;margin-left:6px}
-    .ok{background:#e6f7ef;color:#046c4e;border:1px solid #a7e7c8}
-    .warn{background:#fff7e6;color:#8a5200;border:1px solid #ffd48a}
-    .crit{background:#ffebeb;color:#a40000;border:1px solid #ffb3b3}
-    .info{background:#eef2ff;color:#3730a3;border:1px solid #c7d2fe}
-    """
-
-    _, header_content = sections[0]
-    lines = header_content.splitlines()
-    title = "macOS Python IT Toolkit"
-    meta = html.escape(" | ".join(lines[1:3])) if len(lines) >= 3 else ""
-
-    hs_title, hs_content = sections[1]
-    items = []
-    for line in (hs_content or "").splitlines():
-        cls = 'info'
-        if '[CRIT]' in line:
-            cls = 'crit'
-        elif '[WARN]' in line:
-            cls = 'warn'
-        elif '[OK]' in line:
-            cls = 'ok'
-        display = html.escape(line.split('[')[0].strip())
-        tag = line[line.rfind('['):].strip('[]') if '[' in line else 'INFO'
-        items.append(f"<li>{display} <span class='badge {cls}'>{html.escape(tag)}</span></li>")
-
-    cards = []
-    for title2, content in sections[2:]:
-        cards.append(f"<div class='card'><h2>{html.escape(title2)}</h2><pre>{html.escape(content or '')}</pre></div>")
-
-    html_doc = f"""
-    <!doctype html>
-    <html><head><meta charset='utf-8'><title>{html.escape(title)}</title>
-    <meta name='viewport' content='width=device-width, initial-scale=1'>
-    <style>{css}</style></head>
-    <body>
-      <h1>{html.escape(title)}</h1>
-      <div class='meta'>{meta}</div>
-      <div class='card'>
-        <h2>Health Summary</h2>
-        <ul class='hs'>
-          {''.join(items)}
-        </ul>
-      </div>
-      {''.join(cards)}
-    </body></html>
-    """
-    with open(html_path, 'w') as f:
-        f.write(html_doc)
