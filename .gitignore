@@ -1,0 +1,16 @@
+# Logs and reports
+it-tool/logs/*
+!it-tool/logs/.keep
+
+# Ollama models and bundles (optional AI flow)
+it-tool/ollama/models/*
+!it-tool/ollama/models/.keep
+it-tool/ollama/bundles/*
+!it-tool/ollama/bundles/.keep
+
+# macOS artifacts
+.DS_Store
+._*
+
+# Build archives
+it-drive.zip

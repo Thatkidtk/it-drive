@@ -1,0 +1,23 @@
+#!/bin/bash
+set -euo pipefail
+
+# Resolve app location and run the Python launcher in Terminal
+APP_DIR="$(cd "$(dirname "$0")"/.. && pwd)"
+ROOT_DIR="$(cd "$APP_DIR"/../.. && pwd)"
+
+# Prefer the Python launcher next to the app bundle
+LAUNCH_CMD="$ROOT_DIR/Start-macOS-Python.command"
+
+if [[ ! -f "$LAUNCH_CMD" ]]; then
+  # Fallback: try sibling it-tool folder if moved
+  LAUNCH_CMD="$(cd "$APP_DIR"/../../.. && pwd)/it-tool/Start-macOS-Python.command"
+fi
+
+if [[ ! -f "$LAUNCH_CMD" ]]; then
+  osascript -e 'display alert "IT Drive" message "Could not find Start-macOS-Python.command next to the app. Keep the app inside the it-tool folder."'
+  exit 1
+fi
+
+# Open in Terminal to show progress and prompts
+open -a Terminal "$LAUNCH_CMD"
+
