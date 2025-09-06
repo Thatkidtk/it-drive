@@ -12,6 +12,19 @@ Download Latest
   - https://github.com/Thatkidtk/it-drive/releases/latest/download/it-drive-latest.zip
   - Unzip, then run `it-tool/App/IT Drive.app` or `it-tool/Start-macOS-Python.command`.
 
+Getting Started
+
+- 1) Download and unzip the latest release.
+- 2) Open `it-tool/Start-macOS-Python.command`.
+- 3) Review the HTML diagnostics report that opens.
+- 4) Optionally apply safe fixes in Terminal.
+
+Preview
+
+If present, you’ll see a short GIF here showing the flow:
+
+![Getting Started](docs/getting-started.gif)
+
 Quick Start
 
 - Double‑click `it-tool/Start-macOS-Python.command`.
