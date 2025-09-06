@@ -14,3 +14,4 @@ it-tool/ollama/bundles/*
 
 # Build archives
 it-drive.zip
+it-drive-*.zip
