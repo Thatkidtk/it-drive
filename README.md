@@ -50,12 +50,4 @@ Repository Layout
   - `logs/`: Reports and action logs
   - `App/IT Drive.app`: Simple macOS app wrapper
 
-License
 
-- Add a license if you plan to distribute widely.
-
-Releases
-
-- Recommended: tag a version (e.g., `v1.0.0`) and push; GitHub Actions will attach `it-drive-<tag>.zip` to the Release automatically.
-- Manual: run `it-drive/scripts/build-zip.sh v1.0.0` then upload the generated zip to a new GitHub Release.
-- See `RELEASE.md` for a step‑by‑step checklist.
